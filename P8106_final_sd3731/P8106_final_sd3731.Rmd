@@ -1,0 +1,636 @@
+---
+title: "P8106_final_sd3731"
+author: "Shuchen Dong"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE, 
+                      warning = FALSE)
+```
+
+
+```{r library}
+library(tidyverse)
+library(ggplot2)
+library(lattice)
+library(GGally)
+library(summarytools)
+library(corrplot)
+library(caret)
+library(vip)
+library(rpart.plot)
+library(ranger)
+library(gridExtra)
+library(e1071)
+library(pROC)
+```
+
+
+```{r}
+# import data
+load("./severity_training.RData")
+load("./severity_test.RData")
+```
+
+
+```{r}
+# train data
+trainData = training_data |>  
+  select(-id) |>  
+  janitor::clean_names() |> 
+  mutate(
+    gender = factor(gender,levels = c("0","1"), labels = c("Female", "Male")),
+    race = factor(race,levels = c("1","2","3","4"), labels = c("White", "Asian","Black","Hispanic")),
+    smoking = factor(smoking,levels = c("0","1","2"), labels = c("Never_smoked", "Former_smoker", "Current_smoker")),
+    hypertension = factor(hypertension,levels = c("0", "1"), labels = c("No", "Yes")),
+    diabetes = factor(diabetes,levels = c("0", "1"), labels = c("No", "Yes")),
+    vaccine = factor(vaccine,levels = c("0", "1"), labels = c("Not_vaccinated", "Vaccinated")),
+    severity = factor(severity,levels = c("0", "1"), labels = c("not_severe", "severe"))
+    )
+
+
+# test data
+testData = test_data |> 
+  select(-id) |> 
+  janitor::clean_names() |>
+  mutate(
+    gender = factor(gender,levels = c("0","1"), labels = c("Female", "Male")),
+    race = factor(race,levels = c("1","2","3","4"), labels = c("White", "Asian","Black","Hispanic")),
+    smoking = factor(smoking,levels = c("0","1","2"), labels = c("Never_smoked", "Former_smoker", "Current_smoker")),
+    hypertension = factor(hypertension,levels = c("0", "1"), labels = c("No", "Yes")),
+    diabetes = factor(diabetes,levels = c("0", "1"), labels = c("No", "Yes")),
+    vaccine = factor(vaccine,levels = c("0", "1"), labels = c("Not_vaccinated", "Vaccinated")),
+    severity = factor(severity,levels = c("0", "1"), labels = c("not_severe", "severe"))
+    )
+```
+
+
+```{r}
+# summary
+skimr::skim(trainData)
+skimr::skim(testData)
+```
+
+
+## Exploratory analysis and data visualization
+```{r}
+con_var = c("age", "height", "weight", "bmi", "sbp", "ldl", "depression")
+fac_var = c("gender", "race", "smoking", "diabetes", "hypertension", "vaccine", "severity")
+```
+
+
+### continuous variable
+```{r}
+plot_con_severity = lapply(con_var, function(var) {
+  ggplot(trainData, aes_string(x = var, fill = "severity")) +
+    geom_density(alpha = 0.5) +
+    labs(title = paste("Density plot of", var, "by Severity"), x = var, y = "Density") +
+    scale_fill_manual(values = c("not_severe" = "#66C2A5", "severe" = "#FC8D62")) +
+    theme_minimal()
+})
+
+# Display all plots in a grid
+gridExtra::grid.arrange(grobs = plot_con_severity, nrow = 2, ncol = 4)
+```
+
+
+### categorical variable
+```{r}
+# Bar Chart
+gender_bar = trainData |> 
+  ggplot(aes(x = gender, fill = severity)) +
+  geom_bar(stat = "count",
+           position = "dodge",
+           alpha = 0.8) +
+  labs(x = "Gender", fill = "Severity") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+race_bar = trainData |> 
+  ggplot(aes(x = race, fill = severity)) +
+  geom_bar(stat = "count",
+           position = "dodge",
+           alpha = 0.8) +
+  labs(x = "Race", fill = "Severity") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+smoking_bar = trainData |> 
+  ggplot(aes(x = smoking, fill = severity)) +
+  geom_bar(stat = "count",
+           position = "dodge",
+           alpha = 0.8) +
+  labs(x = "Smoking", fill = "Severity") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+diabetes_bar = trainData |>  
+  ggplot(aes(x = diabetes, fill = severity)) +
+  geom_bar(stat = "count",
+           position = "dodge",
+           alpha = 0.8) +
+  labs(x = "Diabetes", fill = "Severity") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+hypertension_bar = trainData |> 
+  ggplot(aes(x = hypertension, fill = severity)) +
+  geom_bar(stat = "count",
+           position = "dodge",
+           alpha = 0.8) +
+  labs(x = "Hypertension", fill = "Severity") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+vaccine_bar = trainData |> 
+  ggplot(aes(x = vaccine, fill = severity)) +
+  geom_bar(stat = "count",
+           position = "dodge",
+           alpha = 0.8) +
+  labs(x = "Vaccine", fill = "Severity") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+library(gridExtra)
+library(grid)
+grid.arrange(
+  arrangeGrob(
+    gender_bar, race_bar, smoking_bar, 
+    diabetes_bar, hypertension_bar, vaccine_bar,
+    ncol = 3, nrow = 2
+  ),
+  top = textGrob("COVID-19 Severity Analysis by Severity", gp = gpar(fontsize = 16, fontface = "bold"))
+)
+```
+
+
+### correlation
+```{r}
+ggpairs(trainData[, c(con_var, "severity")], 
+        mapping = aes(color = severity),
+        title = "Pairwise Plots of Continuous Variables with Severity")
+
+ggsave("./figure/plot_corr1.jpeg", dpi = 500)
+```
+
+```{r}
+corrplot(cor(trainData[,con_var]), method = "circle", type = "full", 
+         title = "Correlation plot of continuous variables", 
+         mar = c(2, 2, 4, 2))
+ggsave("./figure/plot_corr2.jpeg", dpi = 500)
+```
+
+
+
+
+## Model training
+```{r}
+x = model.matrix(severity ~ . , trainData)[, -1]
+y = trainData[, "severity"]
+
+x2 = model.matrix(severity ~ . , testData)[, -1]
+y2 = testData$severity
+
+# cv
+set.seed(3731)
+ctrl = trainControl(method = "cv", 
+                    number = 10,
+                    classProbs = TRUE, 
+                    allowParallel = TRUE,
+                    summaryFunction = twoClassSummary,
+                    savePredictions = "final")
+```
+
+
+### Logistic Regression
+```{r logistic}
+set.seed(3731)
+glm.fit = train(x,
+                y,
+                method = 'glm',
+                trControl = ctrl)
+coef(glm.fit$finalModel)
+vip(glm.fit$finalModel) + theme_bw()
+
+#max(glm.fit$results$Accuracy)
+```
+
+
+## Penalized logistic regression
+Penalized logistic regression can be fitted using `glmnet`. We use the `train` function to select the optimal tuning parameters.
+
+```{r glmn}
+glmnGrid = expand.grid(.alpha = seq(0, 1, length = 20),
+                        .lambda = exp(seq(-13, -3, length = 50)))
+set.seed(3731)
+glmn.fit = train(severity ~ .,
+                 data = trainData,
+                 method = "glmnet",
+                 tuneGrid = glmnGrid,
+                 trControl = ctrl)
+
+glmn.fit$bestTune 
+
+# plot
+myCol = rainbow(25)
+myPar = list(superpose.symbol = list(col = myCol),
+             superpose.line = list(col = myCol))
+ggplot(glmn.fit, highlight = TRUE) + 
+  labs(title="Penalized Logistic Regression CV Result") +
+  theme_bw()
+
+ggsave("./figure/penal_logi_cv.jpeg", dpi = 500)
+
+# # Confusion matrix
+# glmn.pred.prob = predict(glmn.fit, newdata = testData, type = "prob")
+# glmn.pred = rep("not_severe", nrow(testData))
+# glmn.pred[glmn.pred.prob[, "severe"] > 0.5] = "severe"
+# 
+# confusionMatrix(data = as.factor(glmn.pred),
+#                 reference = y2,
+#                 positive = "severe")
+
+# Coefficients
+coef(glmn.fit$finalModel, glmn.fit$bestTune$lambda)
+vip(glmn.fit$finalModel)
+```
+
+
+### Elastic Net
+```{r enet}
+set.seed(3731)
+enet.fit = train(x, 
+                 y,
+                 method = "glmnet",
+                 tuneGrid = expand.grid(alpha = seq(0, 1, length = 11),
+                                        lambda = exp(seq(2,-8, length = 50))),
+                 trControl = ctrl)
+
+enet.fit$bestTune
+
+# Coefficients
+coef(enet.fit$finalModel, enet.fit$bestTune$lambda)
+
+# plot
+ggplot(enet.fit, highlight = TRUE) + 
+  scale_x_continuous(trans='log', n.breaks = 6) +
+  labs(title ="Elastic Net CV Result") + 
+  theme_bw()
+
+ggsave("./figure/enet_cv.jpeg", dpi = 500)
+
+vip(enet.fit$finalModel)
+```
+
+
+### Generalized Additive Model (GAM)
+```{r gam}
+set.seed(3731)
+gam.fit = train(x,
+                y,
+                method = "gam",
+                metric = "ROC",
+                trControl = ctrl)
+gam.fit$bestTune
+
+ggplot(gam.fit) +
+  labs(title = "GAM CV Result") +
+  theme_bw()
+ggsave("./figure/gam_cv.jpeg", dpi = 500)
+
+# coef(gam.fit$finalModel)
+gam.fit$finalModel
+
+# par(mfrow=c(2, 3))
+# plot(gam.fit$finalModel)
+# par(mfrow=c(1, 1))
+```
+
+
+ ### Multivariate Adaptive Regression Splines (MARS)
+```{r mars}
+mars.grid = expand.grid(degree = 1:5,
+                        nprune = 2:14)
+set.seed(3731)
+mars.fit = train(x,
+                 y,
+                 method = "earth",
+                 tuneGrid = mars.grid,
+                 trControl = ctrl)
+
+ggplot(mars.fit, highlight = TRUE)+ 
+  labs(title  ="MARS CV Result") +
+  theme_bw()
+ggsave("./figure/mars_cv.jpeg", dpi = 500)
+
+mars.fit$bestTune
+coef(mars.fit$finalModel)
+
+summary(mars.fit$finalModel)
+vip(mars.fit$finalModel)
+```
+
+### Linear Discriminant Analysis (LDA)
+```{r lda}
+set.seed(3731)
+lda.fit = train(x,
+                y,
+                method = "lda",
+                metric = "ROC",
+                trControl = ctrl)
+```
+
+
+### Quadratic Discriminant Analysis (QDA)
+```{r qda}
+set.seed(3731)
+qda.fit = train(x,
+                y,
+                method = "qda",
+                metric = "ROC",
+                trControl = ctrl)
+```
+
+
+### Naive Bayes (NB)
+```{r nb}
+nbGrid = expand.grid(usekernel = c(FALSE,TRUE),
+                     fL = 1,
+                     adjust = seq(0.1, 5, by = .1))
+set.seed(3731)
+nb.fit = train(x,
+               y,
+               method = "nb",
+               tuneGrid = nbGrid,
+               metric = "ROC",
+               trControl = ctrl)
+nb.fit$bestTune
+
+ggplot(nb.fit, highlight = TRUE) + 
+  labs(title  ="Naive Bayes Classification CV Result") +
+  theme_bw()
+
+ggsave("./figure/nb_cv.jpeg", dpi = 500)
+```
+
+
+### Random Forest
+```{r RF}
+rf.grid2 = expand.grid(mtry = 1:ncol(x),
+                       splitrule = "gini",
+                       min.node.size = seq(from = 2, to = 16, by = 2))
+set.seed(3731)
+rf.fit2 = train(x, 
+                y,
+                method = "ranger",
+                tuneGrid = rf.grid2,
+                trControl = ctrl)
+
+rf.fit2$bestTune
+
+ggplot(rf.fit2, highlight = TRUE) + 
+  labs(title = "Random Forest Classification CV Result") + 
+  theme_bw()
+ggsave("./figure/rf_classification_cv.jpeg", dpi = 500)
+```
+
+
+### Classification Trees
+```{r}
+rpart.grid = expand.grid(cp = exp(seq(-6,-4, len = 50)))
+set.seed(3731)
+rpart.fit = train(x,
+                  y,
+                  method = "rpart",
+                  tuneGrid = rpart.grid,
+                  trControl = ctrl)
+
+rpart.fit$bestTune
+
+ggplot(rpart.fit, highlight = TRUE) +
+  labs(title = "Classification Tree CV Result") +
+  theme_bw()
+
+# ggsave("./figure/rpart_cv.jpeg", dpi = 500)
+# 
+# rpart.plot(rpart.fit$finalModel)
+# 
+# jpeg("./figure/rpart.jpeg", width = 8, height = 6, units="in", res=500)
+# rpart.plot(rpart.fit$finalModel)
+# dev.off()
+```
+
+
+### Adaboost
+```{r tree}
+gbmA.grid = expand.grid(n.trees = c(2000, 3000, 4000, 5000),
+                        interaction.depth = 1:10,
+                        shrinkage = c(0.001, 0.002, 0.003),
+                        n.minobsinnode = 1)
+set.seed(3731)
+gbmA.fit = train(x,
+                 y,
+                 method = "gbm",
+                 tuneGrid = gbmA.grid,
+                 trControl = ctrl,
+                 distribution = "adaboost",
+                 verbose = FALSE)
+gbmA.fit$bestTune
+
+# plot
+ggplot(gbmA.fit, highlight = TRUE) +
+  labs(title = "Classification Tree(Adaboost) CV Result") + 
+  theme_bw()
+
+ggsave("./figure/gbmA_cv.jpeg", dpi = 500)
+
+# Variable importance
+summary(gbmA.fit$finalModel, las = 2, cBars = 7, cex.names = 0.6)
+```
+
+
+### Support Vector Machine (SVM)
+```{r svml}
+set.seed(3731)
+svml.fit = train(x,
+                 y,
+                 method = "svmLinear",
+                 tuneGrid = data.frame(C = exp(seq(-3, 6, len = 21))),
+                 trControl = ctrl)
+
+ggplot(svml.fit, highlight = TRUE) + 
+  scale_x_continuous(trans='log',n.breaks = 10) +
+  labs(title = "SVM Linear CV result") + 
+  theme_bw()
+ggsave("./figure/svml_cv.jpeg", dpi = 500)
+```
+
+
+```{r svmr}
+svmr.grid = expand.grid(C = exp(seq(-3, 6, len = 20)),
+                        sigma = exp(seq(-4, 1, len = 6)))
+
+set.seed(3731)
+svmr.fit = train(x,
+                 y,
+                 method = "svmRadialSigma",
+                 tuneGrid = svmr.grid,
+                 trControl = ctrl)
+
+svmr.fit$bestTune
+
+# plot
+myCol= rainbow(25)
+myPar = list(superpose.symbol = list(col = myCol),
+             superpose.line = list(col = myCol))
+ggplot(svmr.fit, highlight = TRUE, par.settings = myPar) + 
+  scale_x_continuous(trans='log',n.breaks = 10) +
+  labs(title = "SVM Radial Kernal CV result") + 
+  theme_bw()
+
+ggsave("./figure/svmr_cv.jpeg", dpi = 500)
+```
+
+
+## Model Selection
+```{r resample}
+set.seed(3731)
+resamp = resamples(list(glm = glm.fit,
+                        glmnet = glmn.fit,
+                        enet = enet.fit,
+                        gam = gam.fit,
+                        mars = mars.fit,
+                        lda = lda.fit,
+                        qda = qda.fit,
+                        nb = nb.fit,
+                        rf = rf.fit2,
+                        tree = rpart.fit,
+                        Adaboost = gbmA.fit,
+                        svml = svml.fit,
+                        svmr = svmr.fit))
+
+summary(resamp)
+
+bwplot(resamp, metric = "ROC")
+```
+
+Because the Adaboost model shows the highest median ROC value according to the resampling outcomes reflecting our models' performance on the training group, my choice for predicting the `severity` response variable would be the **Adaboost** model.
+
+
+## Training  / Testing Error
+```{r testerror}
+# Adaboost error
+# training
+pred.gbmA.train = predict(gbmA.fit, newdata = x)
+confusionMatrix(data = pred.gbmA.train, reference = y, positive = "severe")
+##Accuracy : 0.8762; Kappa : 0.7235
+
+# test
+pred.gbmA.test = predict(gbmA.fit, newdata = x2)
+confusionMatrix(data = pred.gbmA.test, reference = y2, positive = "severe")
+##Accuracy : 0.865; Kappa : 0.6809
+```
+
+
+### AUC
+```{r}
+# AUC test
+glm.pred = predict(glm.fit, newdata = x2, type = "prob")[, 2]
+glmn.pred = predict(glmn.fit, newdata = testData, type = "prob")[, 2]
+enet.pred = predict(enet.fit, newdata = x2, type = "prob")[, 2]
+gam.pred = predict(gam.fit, newdata = x2, type = "prob")[, 2]
+mars.pred = predict(mars.fit, newdata = x2, type = "prob")[, 2]
+lda.pred = predict(lda.fit, newdata = x2, type = "prob")[, 2]
+qda.pred = predict(qda.fit, newdata = x2, type = "prob")[, 2]
+nb.pred = predict(nb.fit, newdata = x2, type = "prob")[, 2]
+rf.pred = predict(rf.fit2, newdata = x2, type = "prob")[, 2]
+rpart.pred = predict(rpart.fit, newdata = x2, type = "prob")[, 2]
+gbmA.pred = predict(gbmA.fit, newdata = testData, type = "prob")[, 2]
+svml.pred = predict(svml.fit, newdata = x2, type = "prob")[, 2]
+svmr.pred = predict(svmr.fit, newdata = x2, type = "prob")[, 2]
+
+
+roc.glm = roc(y2, glm.pred)
+roc.glmn = roc(y2, glmn.pred)
+roc.enet = roc(y2, enet.pred)
+roc.gam = roc(y2, gam.pred)
+roc.mars = roc(y2, mars.pred)
+roc.lda = roc(y2, lda.pred)
+roc.qda = roc(y2, qda.pred)
+roc.nb = roc(y2, nb.pred)
+roc.rf = roc(y2, rf.pred)
+roc.rpart = roc(y2, rpart.pred)
+roc.gbmA = roc(y2, gbmA.pred)
+roc.svml = roc(y2, svml.pred)
+roc.svmr = roc(y2, svmr.pred)
+
+
+auc = c(roc.glm$auc,
+        roc.glmn$auc,
+        roc.enet$auc,
+        roc.gam$auc,
+        roc.mars$auc,
+        roc.lda$auc,
+        roc.qda$auc,
+        roc.nb$auc,
+        roc.rf$auc,
+        roc.rpart$auc,
+        roc.gbmA$auc,
+        roc.svml$auc,
+        roc.svmr$auc)
+
+names(auc) = c("GLM", "GLMnet", "ENet", "GAM", "MARS", "LDA", "QDA", "NB", "RF", "RPART", "GBM", "SVML", "SVMR")
+auc
+
+modelNames = c("GLM", "GLMnet", "ENet", "GAM", "MARS", "LDA", "QDA", "NB", "RF", "RPART", "GBM", "SVML", "SVMR")
+# order auc
+auc_data = data.frame(model = modelNames,
+                      auc = auc)
+auc_data[order(-auc_data$auc), ]
+
+# plot auc
+ggroc(list(roc.glm, roc.glmn, roc.enet, roc.gam, roc.mars, roc.lda, roc.qda, roc.nb, roc.rf, roc.rpart, roc.gbmA, roc.svml, roc.svmr), legacy.axes = TRUE) +
+  scale_color_discrete(labels = paste0(modelNames, " (", round(auc, 4), ")"),
+                       name = "Models (AUC)") +
+  geom_abline(intercept = 0, slope = 1, color = "#f9cb9c") +
+  theme_classic() +
+  labs(title = "ROC Curve for all models")
+ggsave("./figure/roc_test.jpeg", dpi = 500)
+```
+
+According to the model, the LDA model also has the highest auc value(**0.8977778**) among all the models. Thus, I prefer to choose the **LDA** model.
+
+
+```{r}
+plot(roc.lda,
+     legacy.axes = TRUE,
+     print.auc = TRUE,
+     main = "ROC Curve for the LDA Model")
+plot(smooth(roc.mars), col = 4, add = TRUE)
+```
+
+
+```{r}
+# test data
+test.pred.prob = predict(lda.fit, newdata = x2, type = "prob")[, 2]
+test.pred = rep("not_severe", length(test.pred.prob))
+test.pred[test.pred.prob > 0.5] = "severe"
+res = confusionMatrix(data = factor(test.pred, levels = c("not_severe", "severe")),
+                      reference = y2,
+                      positive = "severe")
+res
+1-0.835 
+```
+
+Also, the value of Accuracy is 0.835 and Kappa is 0.6341 in LDA for test data.
+In addition, we can obtain the misclassification error rate is 16.5% (1-0.835 = 0.165).
+
+
+
+
+
+
+
+
